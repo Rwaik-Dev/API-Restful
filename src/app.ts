@@ -5,6 +5,7 @@ import { errorHandler, notFoundHandler } from './shared/errors/errorHandler.js';
 import { createRateLimiter } from './shared/middlewares/rateLimiter.js';
 import { requestId } from './shared/middlewares/requestId.js';
 import { requestLogger } from './shared/middlewares/requestLogger.js';
+import { corsPolicy, securityHeaders } from './shared/middlewares/security.js';
 import { healthRouter } from './routes/health.routes.js';
 import { createApiRouter } from './routes/index.js';
 
@@ -25,6 +26,8 @@ export function createApp(options: AppOptions = {}): Express {
 
   app.use(requestId);
   app.use(requestLogger);
+  app.use(securityHeaders(env.NODE_ENV === 'production'));
+  app.use(corsPolicy(env.CORS_ORIGINS));
   app.use(express.json({ limit: env.JSON_BODY_LIMIT }));
 
   app.use(healthRouter);

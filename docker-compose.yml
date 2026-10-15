@@ -1,0 +1,37 @@
+name: task-management-api
+
+services:
+  api:
+    image: task-management-api:local
+    build: .
+    env_file:
+      - path: .env
+        required: true
+    environment:
+      # Ambiente local em HTTP; em produção use NODE_ENV=production atrás de TLS.
+      NODE_ENV: development
+      MONGODB_URI: mongodb://mongodb:27017/task_management
+      PORT: 3000
+    ports:
+      - '3000:3000'
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+    stop_grace_period: 15s
+
+  mongodb:
+    image: mongo:8
+    # Sem porta publicada: o banco só é acessível pela rede interna do Compose.
+    volumes:
+      - mongo-data:/data/db
+    healthcheck:
+      test: ['CMD', 'mongosh', '--quiet', '--eval', "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+
+volumes:
+  mongo-data:

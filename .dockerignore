@@ -1,0 +1,15 @@
+node_modules
+dist
+coverage
+tests
+tasks
+.git
+.github
+.cursor
+.env
+.env.*
+!.env.example
+*.log
+Dockerfile
+docker-compose.yml
+.dockerignore
