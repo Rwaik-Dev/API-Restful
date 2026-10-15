@@ -1,5 +1,6 @@
 import express, { type Express } from 'express';
 import { env } from './config/env.js';
+import { createDocsRouter } from './config/swagger.js';
 import { errorHandler, notFoundHandler } from './shared/errors/errorHandler.js';
 import { createRateLimiter } from './shared/middlewares/rateLimiter.js';
 import { requestId } from './shared/middlewares/requestId.js';
@@ -27,6 +28,7 @@ export function createApp(options: AppOptions = {}): Express {
   app.use(express.json({ limit: env.JSON_BODY_LIMIT }));
 
   app.use(healthRouter);
+  app.use('/api', createDocsRouter());
   app.use(
     env.API_PREFIX,
     createRateLimiter({

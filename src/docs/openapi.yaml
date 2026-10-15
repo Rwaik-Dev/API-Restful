@@ -1,0 +1,741 @@
+openapi: 3.1.0
+info:
+  title: Task Management API
+  version: 1.0.0
+  description: |
+    API REST para gerenciamento seguro de tarefas.
+
+    ## Autenticação
+
+    1. `POST /auth/login` devolve um **access token** (JWT, curta duração) e um **refresh token** opaco.
+    2. Envie o access token em `Authorization: Bearer <token>` nas rotas protegidas.
+    3. Quando o access token expirar, chame `POST /auth/refresh` com o refresh token no body JSON.
+       A resposta traz um **novo** refresh token; o anterior deixa de valer imediatamente.
+
+    ### Transporte do refresh token
+
+    O refresh token trafega no **body JSON** (não há cookie), então não é necessária proteção CSRF.
+    Clientes devem guardá-lo em armazenamento seguro da plataforma; em navegadores, mantenha-o em
+    memória e nunca em `localStorage`. Nunca envie tokens por query string.
+
+    ### Renovação concorrente
+
+    Serialize as chamadas a `/auth/refresh` no cliente. Se o mesmo refresh token for usado duas
+    vezes (por exemplo, em duas abas ao mesmo tempo), apenas uma chamada vence; reutilizar um token
+    já rotacionado é tratado como possível roubo e **revoga a sessão**, exigindo novo login.
+
+    ## Erros
+
+    Todas as respostas de erro seguem o schema `Error`. O campo `requestId` também é enviado no
+    header `X-Request-Id` e ajuda no suporte. `400` indica dados malformados ou inválidos;
+    `404` também é usado para recursos de outros usuários, para não revelar sua existência.
+  license:
+    name: MIT
+    identifier: MIT
+
+servers:
+  - url: /api/v1
+
+tags:
+  - name: Auth
+    description: Cadastro, login e ciclo de vida dos tokens.
+  - name: Sessions
+    description: Sessões ativas do usuário autenticado.
+  - name: Tasks
+    description: Tarefas do usuário autenticado.
+  - name: Health
+    description: Verificações de infraestrutura.
+
+security:
+  - bearerAuth: []
+
+paths:
+  /auth/register:
+    post:
+      tags: [Auth]
+      operationId: register
+      summary: Criar usuário
+      description: Sempre cria usuários com `role` igual a `user`. Campos extras são rejeitados.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RegisterInput'
+            example:
+              name: Maria Silva
+              email: maria@example.com
+              password: uma-senha-longa-e-segura
+      responses:
+        '201':
+          description: Usuário criado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/login:
+    post:
+      tags: [Auth]
+      operationId: login
+      summary: Abrir sessão
+      description: Credenciais inválidas sempre recebem a mesma mensagem genérica.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginInput'
+            example:
+              email: maria@example.com
+              password: uma-senha-longa-e-segura
+              deviceName: Notebook pessoal
+      responses:
+        '200':
+          description: Sessão criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshTokens
+      summary: Rotacionar refresh token
+      description: |
+        Troca o refresh token por um novo par de tokens. O token enviado é invalidado.
+        Reutilizar um token já rotacionado revoga a sessão inteira.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RefreshInput'
+      responses:
+        '200':
+          description: Novos tokens emitidos.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TokensResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: Revogar a sessão atual
+      description: Idempotente. Exige apenas um access token com assinatura e claims válidas.
+      responses:
+        '204':
+          description: Sessão revogada (ou já estava revogada).
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/logout-all:
+    post:
+      tags: [Auth]
+      operationId: logoutAll
+      summary: Revogar todas as sessões do usuário
+      responses:
+        '204':
+          description: Todas as sessões foram revogadas.
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /auth/me:
+    get:
+      tags: [Auth]
+      operationId: getCurrentUser
+      summary: Perfil do usuário atual
+      responses:
+        '200':
+          description: Usuário autenticado.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UserResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /sessions:
+    get:
+      tags: [Sessions]
+      operationId: listSessions
+      summary: Listar sessões ativas
+      description: Nunca expõe tokens ou hashes. `current` indica a sessão da requisição.
+      responses:
+        '200':
+          description: Sessões ativas.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [success, data]
+                properties:
+                  success:
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/SessionSummary'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /sessions/{sessionId}:
+    delete:
+      tags: [Sessions]
+      operationId: revokeSession
+      summary: Revogar uma sessão do usuário
+      parameters:
+        - $ref: '#/components/parameters/SessionId'
+      responses:
+        '204':
+          description: Sessão revogada.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /tasks:
+    get:
+      tags: [Tasks]
+      operationId: listTasks
+      summary: Listar tarefas do usuário autenticado
+      description: |
+        Sempre paginado. Ordenação padrão: `createdAt` decrescente, com `_id` como desempate.
+        Parâmetros desconhecidos ou repetidos são rejeitados com `400`.
+      parameters:
+        - name: page
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 1 }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 100, default: 20 }
+        - name: status
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskStatus'
+        - name: priority
+          in: query
+          schema:
+            $ref: '#/components/schemas/TaskPriority'
+        - name: sortBy
+          in: query
+          description: '`priority` ordena semanticamente (low < medium < high).'
+          schema:
+            type: string
+            enum: [createdAt, updatedAt, dueDate, title, priority]
+            default: createdAt
+        - name: order
+          in: query
+          schema: { type: string, enum: [asc, desc], default: desc }
+        - name: search
+          in: query
+          description: Busca literal, sem diferenciar maiúsculas, no título e na descrição.
+          schema: { type: string, minLength: 1, maxLength: 100 }
+        - name: tags
+          in: query
+          description: Lista separada por vírgulas (até 10). Retorna tarefas que tenham **todas** as tags.
+          schema: { type: string }
+          example: backend,documentacao
+        - name: dueAfter
+          in: query
+          description: Data ISO 8601. Inclui tarefas com `dueDate` maior ou igual.
+          schema: { type: string, format: date-time }
+        - name: dueBefore
+          in: query
+          description: Data ISO 8601. Inclui tarefas com `dueDate` menor ou igual.
+          schema: { type: string, format: date-time }
+      responses:
+        '200':
+          description: Página de tarefas.
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: false
+                required: [success, data, meta]
+                properties:
+                  success:
+                    const: true
+                  data:
+                    type: array
+                    items:
+                      $ref: '#/components/schemas/Task'
+                  meta:
+                    $ref: '#/components/schemas/PaginationMeta'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+    post:
+      tags: [Tasks]
+      operationId: createTask
+      summary: Criar tarefa
+      description: '`userId`, `completedAt`, `createdAt` e `updatedAt` são definidos pelo servidor.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/CreateTaskInput'
+            example:
+              title: Documentar a API
+              description: Finalizar os contratos OpenAPI
+              priority: high
+              status: pending
+              dueDate: '2026-10-25T18:00:00.000Z'
+              tags: [backend, documentacao]
+      responses:
+        '201':
+          description: Tarefa criada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /tasks/{taskId}:
+    parameters:
+      - $ref: '#/components/parameters/TaskId'
+    get:
+      tags: [Tasks]
+      operationId: getTask
+      summary: Buscar tarefa própria
+      responses:
+        '200':
+          description: Tarefa encontrada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    patch:
+      tags: [Tasks]
+      operationId: updateTask
+      summary: Atualizar campos permitidos
+      description: |
+        Alterar `status` para `completed` preenche `completedAt`; sair de `completed` o limpa.
+        Envie `null` em `description` ou `dueDate` para removê-los.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateTaskInput'
+            example:
+              status: completed
+      responses:
+        '200':
+          description: Tarefa atualizada.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TaskResponse'
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+    delete:
+      tags: [Tasks]
+      operationId: deleteTask
+      summary: Excluir tarefa própria
+      responses:
+        '204':
+          description: Tarefa excluída.
+        '400':
+          $ref: '#/components/responses/ValidationError'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '404':
+          $ref: '#/components/responses/NotFound'
+
+  /health:
+    servers:
+      - url: /
+    get:
+      tags: [Health]
+      operationId: health
+      summary: Healthcheck do processo
+      security: []
+      responses:
+        '200':
+          description: Processo ativo.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+
+  /ready:
+    servers:
+      - url: /
+    get:
+      tags: [Health]
+      operationId: ready
+      summary: Readiness das dependências
+      security: []
+      responses:
+        '200':
+          description: Dependências prontas.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '503':
+          description: Alguma dependência essencial está indisponível.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Error'
+
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+  parameters:
+    TaskId:
+      name: taskId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+    SessionId:
+      name: sessionId
+      in: path
+      required: true
+      schema:
+        $ref: '#/components/schemas/ObjectId'
+
+  responses:
+    ValidationError:
+      description: Requisição malformada ou dados inválidos.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+          example:
+            success: false
+            error:
+              code: VALIDATION_ERROR
+              message: Os dados enviados são inválidos.
+              details:
+                - field: title
+                  message: O título é obrigatório.
+              requestId: req_3f1c2a9e-0000-4000-8000-000000000000
+    Unauthorized:
+      description: Credenciais ausentes ou inválidas, token inválido/expirado ou sessão revogada.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Forbidden:
+      description: Identidade sem permissão para a ação (por exemplo, conta desativada).
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    NotFound:
+      description: Recurso não encontrado ou não acessível ao usuário.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    Conflict:
+      description: Conflito, por exemplo e-mail já cadastrado.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+    TooManyRequests:
+      description: Limite de requisições excedido. Veja os headers `RateLimit` e `Retry-After`.
+      headers:
+        Retry-After:
+          schema: { type: integer }
+          description: Segundos até poder tentar novamente.
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+
+  schemas:
+    ObjectId:
+      type: string
+      pattern: '^[a-fA-F0-9]{24}$'
+      example: 671a1234567890abcdef1234
+
+    TaskStatus:
+      type: string
+      enum: [pending, in_progress, completed]
+
+    TaskPriority:
+      type: string
+      enum: [low, medium, high]
+
+    Error:
+      type: object
+      additionalProperties: false
+      required: [success, error]
+      properties:
+        success:
+          const: false
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, requestId]
+          properties:
+            code:
+              type: string
+              examples: [VALIDATION_ERROR, UNAUTHORIZED, NOT_FOUND, RATE_LIMITED]
+            message:
+              type: string
+            details:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                required: [field, message]
+                properties:
+                  field: { type: string }
+                  message: { type: string }
+            requestId:
+              type: string
+
+    StatusResponse:
+      type: object
+      additionalProperties: false
+      required: [success, data]
+      properties:
+        success:
+          const: true
+        data:
+          type: object
+          additionalProperties: false
+          required: [status]
+          properties:
+            status: { type: string, enum: [ok, ready] }
+
+    User:
+      type: object
+      additionalProperties: false
+      required: [id, name, email, role, isActive, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/ObjectId' }
+        name: { type: string, maxLength: 100 }
+        email: { type: string, format: email }
+        role: { type: string, enum: [user, admin] }
+        isActive: { type: boolean }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    UserResponse:
+      type: object
+      additionalProperties: false
+      required: [success, data]
+      properties:
+        success:
+          const: true
+        data:
+          $ref: '#/components/schemas/User'
+
+    AuthTokens:
+      type: object
+      additionalProperties: false
+      required: [tokenType, accessToken, expiresIn, refreshToken]
+      properties:
+        tokenType:
+          const: Bearer
+        accessToken:
+          type: string
+          description: JWT para o header `Authorization`.
+        expiresIn:
+          type: integer
+          description: Validade do access token em segundos.
+          example: 900
+        refreshToken:
+          type: string
+          description: Token opaco de uso único. Guarde com segurança.
+
+    TokensResponse:
+      type: object
+      additionalProperties: false
+      required: [success, data]
+      properties:
+        success:
+          const: true
+        data:
+          $ref: '#/components/schemas/AuthTokens'
+
+    LoginResponse:
+      type: object
+      additionalProperties: false
+      required: [success, data]
+      properties:
+        success:
+          const: true
+        data:
+          type: object
+          additionalProperties: false
+          required: [tokenType, accessToken, expiresIn, refreshToken, user]
+          properties:
+            tokenType:
+              const: Bearer
+            accessToken: { type: string }
+            expiresIn: { type: integer }
+            refreshToken: { type: string }
+            user:
+              $ref: '#/components/schemas/User'
+
+    SessionSummary:
+      type: object
+      additionalProperties: false
+      required: [id, deviceName, userAgent, createdAt, lastUsedAt, expiresAt, current]
+      properties:
+        id: { $ref: '#/components/schemas/ObjectId' }
+        deviceName: { type: [string, 'null'] }
+        userAgent: { type: [string, 'null'] }
+        createdAt: { type: string, format: date-time }
+        lastUsedAt: { type: string, format: date-time }
+        expiresAt: { type: string, format: date-time }
+        current:
+          type: boolean
+          description: Indica a sessão usada nesta requisição.
+
+    Task:
+      type: object
+      additionalProperties: false
+      required:
+        [id, title, description, status, priority, dueDate, tags, completedAt, createdAt, updatedAt]
+      properties:
+        id: { $ref: '#/components/schemas/ObjectId' }
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        priority: { $ref: '#/components/schemas/TaskPriority' }
+        dueDate: { type: [string, 'null'], format: date-time }
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string, maxLength: 30 }
+        completedAt: { type: [string, 'null'], format: date-time }
+        createdAt: { type: string, format: date-time }
+        updatedAt: { type: string, format: date-time }
+
+    TaskResponse:
+      type: object
+      additionalProperties: false
+      required: [success, data]
+      properties:
+        success:
+          const: true
+        data:
+          $ref: '#/components/schemas/Task'
+
+    PaginationMeta:
+      type: object
+      additionalProperties: false
+      required: [page, limit, totalItems, totalPages]
+      properties:
+        page: { type: integer, minimum: 1 }
+        limit: { type: integer, minimum: 1, maximum: 100 }
+        totalItems: { type: integer, minimum: 0 }
+        totalPages: { type: integer, minimum: 0 }
+
+    RegisterInput:
+      type: object
+      additionalProperties: false
+      required: [name, email, password]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 100 }
+        email: { type: string, format: email, maxLength: 254 }
+        password: { type: string, minLength: 8, maxLength: 128, format: password }
+
+    LoginInput:
+      type: object
+      additionalProperties: false
+      required: [email, password]
+      properties:
+        email: { type: string, format: email }
+        password: { type: string, minLength: 1, maxLength: 128, format: password }
+        deviceName: { type: string, minLength: 1, maxLength: 100 }
+
+    RefreshInput:
+      type: object
+      additionalProperties: false
+      required: [refreshToken]
+      properties:
+        refreshToken: { type: string, minLength: 1, maxLength: 512 }
+
+    CreateTaskInput:
+      type: object
+      additionalProperties: false
+      required: [title]
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: string, maxLength: 2000 }
+        status:
+          allOf: [{ $ref: '#/components/schemas/TaskStatus' }]
+          default: pending
+        priority:
+          allOf: [{ $ref: '#/components/schemas/TaskPriority' }]
+          default: medium
+        dueDate: { type: string, format: date-time }
+        tags:
+          type: array
+          maxItems: 20
+          description: Normalizadas para minúsculas e sem duplicatas.
+          items: { type: string, minLength: 1, maxLength: 30 }
+
+    UpdateTaskInput:
+      type: object
+      additionalProperties: false
+      minProperties: 1
+      properties:
+        title: { type: string, minLength: 1, maxLength: 200 }
+        description: { type: [string, 'null'], maxLength: 2000 }
+        status: { $ref: '#/components/schemas/TaskStatus' }
+        priority: { $ref: '#/components/schemas/TaskPriority' }
+        dueDate: { type: [string, 'null'], format: date-time }
+        tags:
+          type: array
+          maxItems: 20
+          items: { type: string, minLength: 1, maxLength: 30 }
